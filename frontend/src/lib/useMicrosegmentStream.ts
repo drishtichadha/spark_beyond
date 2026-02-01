@@ -25,6 +25,15 @@ export interface MicrosegmentStreamParams {
   maxMicrosegments: number;
 }
 
+interface WebSocketMessage {
+  type: 'status' | 'progress' | 'batch' | 'complete' | 'error' | 'cancelled' | 'pong';
+  status?: string;
+  message?: string;
+  progress?: number;
+  microsegments?: Microsegment[];
+  total?: number;
+}
+
 export interface UseMicrosegmentStreamReturn {
   state: MicrosegmentStreamState;
   startDiscovery: (params: MicrosegmentStreamParams) => void;
@@ -45,64 +54,28 @@ export function useMicrosegmentStream(): UseMicrosegmentStreamReturn {
   const [state, setState] = useState<MicrosegmentStreamState>(initialState);
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cleanup on unmount
   useEffect(() => {
+    const timeoutRef = reconnectTimeoutRef.current;
     return () => {
       if (wsRef.current) {
         wsRef.current.close();
       }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
+      if (timeoutRef) {
+        clearTimeout(timeoutRef);
       }
     };
   }, []);
 
-  const connect = useCallback((): Promise<WebSocket> => {
-    return new Promise((resolve, reject) => {
-      // Close existing connection if any
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-
-      const ws = new WebSocket(getWebSocketUrl('/ws/microsegments'));
-
-      ws.onopen = () => {
-        setIsConnected(true);
-        resolve(ws);
-      };
-
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setIsConnected(false);
-        reject(error);
-      };
-
-      ws.onclose = () => {
-        setIsConnected(false);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          handleMessage(data);
-        } catch (e) {
-          console.error('Failed to parse WebSocket message:', e);
-        }
-      };
-
-      wsRef.current = ws;
-    });
-  }, []);
-
-  const handleMessage = useCallback((data: any) => {
+  const handleMessage = useCallback((data: WebSocketMessage) => {
     switch (data.type) {
       case 'status':
         setState((prev) => ({
           ...prev,
           status: data.status === 'starting' ? 'discovering' : prev.status,
-          progress: { progress: 0, message: data.message },
+          progress: { progress: 0, message: data.message || '' },
         }));
         break;
 
@@ -111,15 +84,15 @@ export function useMicrosegmentStream(): UseMicrosegmentStreamReturn {
           ...prev,
           status: 'discovering',
           progress: {
-            progress: data.progress,
-            message: data.message,
+            progress: data.progress || 0,
+            message: data.message || '',
           },
         }));
         break;
 
       case 'batch':
         setState((prev) => {
-          const newMicrosegments = [...prev.microsegments, ...data.microsegments];
+          const newMicrosegments = [...prev.microsegments, ...(data.microsegments || [])];
           return {
             ...prev,
             microsegments: newMicrosegments,
@@ -133,7 +106,7 @@ export function useMicrosegmentStream(): UseMicrosegmentStreamReturn {
           ...prev,
           status: 'complete',
           progress: { progress: 100, message: data.message || 'Discovery complete!' },
-          totalFound: data.total,
+          totalFound: data.total || prev.totalFound,
         }));
         // Close connection after completion
         if (wsRef.current) {
@@ -145,7 +118,7 @@ export function useMicrosegmentStream(): UseMicrosegmentStreamReturn {
         setState((prev) => ({
           ...prev,
           status: 'error',
-          error: data.message,
+          error: data.message || 'Unknown error',
         }));
         break;
 
@@ -165,6 +138,43 @@ export function useMicrosegmentStream(): UseMicrosegmentStreamReturn {
         console.log('Unknown message type:', data.type);
     }
   }, []);
+
+  const connect = useCallback((): Promise<WebSocket> => {
+    return new Promise((resolve, reject) => {
+      // Close existing connection if any
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+
+      const ws = new WebSocket(getWebSocketUrl('/ws/microsegments'));
+
+      ws.onopen = () => {
+        setIsConnected(true);
+        resolve(ws);
+      };
+
+      ws.onerror = (err) => {
+        console.error('WebSocket error:', err);
+        setIsConnected(false);
+        reject(err);
+      };
+
+      ws.onclose = () => {
+        setIsConnected(false);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as WebSocketMessage;
+          handleMessage(data);
+        } catch (e) {
+          console.error('Failed to parse WebSocket message:', e);
+        }
+      };
+
+      wsRef.current = ws;
+    });
+  }, [handleMessage]);
 
   const startDiscovery = useCallback(async (params: MicrosegmentStreamParams) => {
     // Reset state before starting
@@ -196,7 +206,7 @@ export function useMicrosegmentStream(): UseMicrosegmentStreamReturn {
           },
         })
       );
-    } catch (error) {
+    } catch {
       setState((prev) => ({
         ...prev,
         status: 'error',

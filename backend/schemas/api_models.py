@@ -38,6 +38,18 @@ class ScalingStrategy(str, Enum):
 
 class LoadDataRequest(BaseModel):
     file_path: str = Field(..., description="Path to the CSV file")
+    max_rows: Optional[int] = Field(
+        1_000_000,
+        description="Maximum number of rows to load (default: 1 million)",
+        ge=1,
+        le=10_000_000
+    )
+    max_file_size_mb: Optional[int] = Field(
+        500,
+        description="Maximum file size in MB (default: 500MB)",
+        ge=1,
+        le=2000
+    )
 
 
 class ProblemDefinition(BaseModel):

@@ -211,6 +211,7 @@ class SparkService:
     """
 
     _instance = None  # For singleton backward compatibility
+    _initialized: bool = False  # Class-level declaration for Pylint
 
     def __new__(cls, session_id: Optional[str] = None, **kwargs):
         # Only use singleton for backward compatibility when no session_id provided
@@ -283,14 +284,43 @@ class SparkService:
     def feature_selector(self) -> Optional[FeatureSelector]:
         return self._feature_selector
 
-    def load_data(self, file_path: str) -> Dict[str, Any]:
-        """Load CSV data into Spark DataFrame"""
+    def load_data(self, file_path: str, max_rows: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Load CSV data into Spark DataFrame with size limits.
+
+        Note: Path validation should already be performed by the route handler.
+        This method assumes the file_path has been validated.
+
+        Args:
+            file_path: Validated file path (should be absolute path after validation)
+            max_rows: Maximum number of rows to load (default: 1 million)
+
+        Returns:
+            Dataset information dictionary with row count and truncation status
+
+        Raises:
+            Exception: If data loading fails
+        """
         try:
-            self._df = process_col_names(self.spark.read.options(
+            logger.info(f"Loading data from: {file_path}")
+
+            # Load data with Spark
+            df = process_col_names(self.spark.read.options(
                 header=True,
                 inferSchema='True',
                 delimiter=','
             ).csv(file_path))
+
+            # Apply row limit if specified
+            if max_rows is not None and max_rows > 0:
+                # Get actual row count (cache for performance)
+                actual_count = df.count()
+
+                if actual_count > max_rows:
+                    logger.warning(f"Dataset has {actual_count} rows, limiting to {max_rows}")
+                    df = df.limit(max_rows)
+
+            self._df = df
 
             # Reset downstream state
             self._problem = None
@@ -303,9 +333,10 @@ class SparkService:
             # Invalidate insight cache when data changes
             self._insight_cache.invalidate()
 
+            logger.info(f"Data loaded successfully: {self._df.count()} rows")
             return self.get_dataset_info()
         except Exception as e:
-            logger.error(f"Failed to load data: {e}")
+            logger.error(f"Failed to load data from {file_path}: {e}")
             raise
 
     def get_dataset_info(self) -> Optional[Dict[str, Any]]:

@@ -1,0 +1,8 @@
+.databricks
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Session data (parquet files, models, etc.)
+backend/data/sessions/

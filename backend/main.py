@@ -94,14 +94,25 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware - configured via environment for security
+# In production, set CORS_ORIGINS environment variable to comma-separated list of allowed origins
+CORS_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+).split(",")
+
+# Resource limits configuration
+# Set RESOURCE_TIER environment variable to: production, development, or enterprise
+RESOURCE_TIER = os.getenv("RESOURCE_TIER", "production")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],  # Explicit methods (no wildcard)
+    allow_headers=["Content-Type", "Authorization", "X-Session-ID"],  # Explicit headers (no wildcard)
     expose_headers=["X-Session-ID", "X-Session-New"],
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 # Session middleware (must be added after CORS)

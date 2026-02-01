@@ -10,6 +10,8 @@ from backend.schemas.api_models import (
     DatasetInfo, QualityReport, SchemaInfo
 )
 from backend.services.spark_service import spark_service, get_spark_service, SparkService
+from backend.core.utils.path_validator import validate_file_path, PathValidationError
+from backend.config import get_resource_limits, DEFAULT_LIMITS
 
 logger = logging.getLogger(__name__)
 
@@ -42,21 +44,113 @@ async def get_state(svc: SparkService = Depends(get_session_service)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/limits")
+async def get_limits():
+    """
+    Get resource limits for the current tier.
+
+    Returns limits for:
+    - File size
+    - Row count
+    - Feature generation
+    - Training time
+    - Data profiling
+    """
+    try:
+        limits = DEFAULT_LIMITS
+        return APIResponse(
+            success=True,
+            message="Resource limits retrieved",
+            data=limits.to_dict()
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/load")
 async def load_data(request: LoadDataRequest, svc: SparkService = Depends(get_session_service)):
-    """Load dataset from CSV file"""
+    """
+    Load dataset from CSV file.
+
+    Security:
+    - File path is validated to prevent path traversal attacks.
+    - File size is checked before loading to prevent resource exhaustion.
+    - Row count is limited to prevent memory issues.
+
+    Limits are enforced at multiple layers:
+    1. File size check before reading
+    2. Row count limit during loading
+    3. Resource limits based on tier (production/development/enterprise)
+    """
     try:
-        info = svc.load_data(request.file_path)
+        import os
+
+        # Get resource limits
+        limits = DEFAULT_LIMITS
+
+        # Validate file path to prevent path traversal attacks
+        validated_path = validate_file_path(request.file_path)
+        logger.info(f"Loading data from validated path: {validated_path}")
+
+        # Check if file exists
+        if not os.path.exists(validated_path):
+            raise HTTPException(status_code=404, detail=f"File not found: {request.file_path}")
+
+        # Check file size before loading
+        file_size_bytes = os.path.getsize(validated_path)
+        file_size_mb = file_size_bytes / (1024 * 1024)
+
+        # Enforce max file size (use request value if provided, otherwise use tier limit)
+        max_size_mb = min(
+            request.max_file_size_mb or limits.max_file_size_mb,
+            limits.max_file_size_mb  # Tier limit is the hard cap
+        )
+
+        if file_size_mb > max_size_mb:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large: {file_size_mb:.1f}MB exceeds maximum of {max_size_mb}MB. "
+                       f"Please use a smaller dataset or contact support for higher limits."
+            )
+
+        logger.info(f"File size: {file_size_mb:.1f}MB (limit: {max_size_mb}MB)")
+
+        # Enforce max rows (use request value if provided, otherwise use tier limit)
+        max_rows = min(
+            request.max_rows or limits.default_max_rows,
+            limits.absolute_max_rows  # Absolute hard limit
+        )
+
+        # Load data using validated path with row limit
+        info = svc.load_data(str(validated_path), max_rows=max_rows)
+
+        # Check if data was truncated
+        if info['rows'] >= max_rows:
+            logger.warning(f"Dataset truncated to {max_rows} rows")
+            return APIResponse(
+                success=True,
+                message=f"Dataset loaded (truncated): {info['rows']} rows x {info['columns']} columns. "
+                        f"Original file may contain more rows.",
+                data={**info, "truncated": True, "max_rows": max_rows}
+            )
+
         # Save state after loading data
         await svc.save_state()
         return APIResponse(
             success=True,
             message=f"Dataset loaded: {info['rows']} rows x {info['columns']} columns",
-            data=info
+            data={**info, "truncated": False}
         )
-    except FileNotFoundError:
+    except PathValidationError as e:
+        logger.warning(f"Path validation failed: {e}")
+        raise HTTPException(status_code=403, detail=str(e))
+    except HTTPException:
+        raise
+    except FileNotFoundError as e:
+        logger.warning(f"File not found: {e}")
         raise HTTPException(status_code=404, detail=f"File not found: {request.file_path}")
     except Exception as e:
+        logger.error(f"Failed to load data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -150,8 +244,17 @@ async def run_data_profile(
     max_rows: int = 50000,
     svc: SparkService = Depends(get_session_service)
 ):
-    """Run comprehensive data profiling using ydata-profiling"""
+    """
+    Run comprehensive data profiling using ydata-profiling.
+
+    Args:
+        minimal: Use minimal profiling for faster results
+        max_rows: Maximum rows to sample (enforced: 1-100,000)
+    """
     try:
+        # Enforce max_rows limit for profiling
+        max_rows = min(max(max_rows, 1), 100_000)  # Clamp between 1 and 100K
+
         logger.info(f"Running data profile with minimal={minimal}, max_rows={max_rows}")
         report = svc.run_data_profile(minimal=minimal, max_rows=max_rows)
         # Save state after profiling

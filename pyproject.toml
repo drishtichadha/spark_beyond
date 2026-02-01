@@ -3,7 +3,7 @@ name = "spark-beyond"
 version = "0.2.0"
 description = "ML Feature Discovery Platform with AutoML capabilities"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     # Core ML and Data Processing
     "matplotlib>=3.10.8",
@@ -14,7 +14,6 @@ dependencies = [
     "pyspark>=4.1.0",
     "scikit-learn>=1.8.0",
     "shap>=0.49.1",
-    "streamlit>=1.53.0",
     "xgboost>=2.0.0", # Relaxed for LightAutoML compatibility
     # Advanced Feature Engineering & AutoML
     "ydata-profiling>=4.10.0",

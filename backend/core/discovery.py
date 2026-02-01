@@ -3,6 +3,9 @@ from enum import StrEnum, Enum
 from typing import Literal, Union, Optional
 import pyspark.sql.functions as psf
 from pyspark.sql import DataFrame
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # PROBLEM_TYPE = ["regression", "classification"]
@@ -26,12 +29,8 @@ class Problem(BaseModel):
 class ClassificationProblem(Problem):
     @staticmethod
     def is_allowed_dtypes(dtype: str):
-        _allowed_types = getattr(ColumnTypes, "categorical").value + getattr(ColumnTypes, "boolean").value + ["int"]
-        print(dtype, _allowed_types)
-        if dtype in _allowed_types:
-            return True
-        else:
-            return False
+        _allowed_types = ColumnTypes.categorical.value + ColumnTypes.boolean.value + ["int"]
+        return dtype in _allowed_types
         
     
     def _get_col_unique_count(self, dataframe, col_name: str):
@@ -64,12 +63,10 @@ class ClassificationProblem(Problem):
 class RegressionProblem(Problem):
     @staticmethod
     def is_allowed_dtypes(dtype: str):
-        _allowed_types = getattr(ColumnTypes, "numerical")
-        _allowed_types.remove("int")
-        if dtype in _allowed_types:
-            return True
-        else:
-            return False
+        _allowed_types = ColumnTypes.numerical.value
+        # Exclude int from allowed types for regression
+        _allowed_types = [t for t in _allowed_types if t != "int"]
+        return dtype in _allowed_types
         
 
 class SchemaChecks:
@@ -81,7 +78,7 @@ class SchemaChecks:
         return dataframe.toDF(*[c.replace(".", "_") for c in dataframe.columns])
 
     def get_typed_col(self, col_type: Literal["categorical", "numerical", "boolean", "datetime"]):
-        col_types = getattr(ColumnTypes, col_type).value
+        col_types = ColumnTypes[col_type].value
         return [col for col, _ctype in self.dataframe.dtypes if _ctype in col_types]
 
     def get_col_type(self, col_name: str):
@@ -156,11 +153,20 @@ class SchemaChecks:
             return
 
         if self.problem.date_column not in self.dataframe.columns:
-            raise ValueError(f"Date column {self.problem.date_column} not found.")
+            available = ", ".join(self.dataframe.columns[:5])
+            available_suffix = "..." if len(self.dataframe.columns) > 5 else ""
+            raise ValueError(
+                f"Date column '{self.problem.date_column}' not found. "
+                f"Available columns: {available}{available_suffix}"
+            )
 
         date_col_type = self.get_col_type(self.problem.date_column)
-        if date_col_type not in getattr(ColumnTypes, "datetime").value:
-            raise ValueError(f'Date column {self.problem.date_column} must have a temporal dtype (date, time or timestamp), found {date_col_type}')
+        if date_col_type not in ColumnTypes.datetime.value:
+            expected_types = ", ".join(ColumnTypes.datetime.value)
+            raise ValueError(
+                f"Date column '{self.problem.date_column}' must have a temporal dtype, "
+                f"found '{date_col_type}'. Expected one of: {expected_types}"
+            )
         
 
     def bool_checks(self):
@@ -185,23 +191,50 @@ class SchemaChecks:
         return details
 
     def target_checks(self, max_classes: int = 10):
-        if self.problem.target not in self.dataframe.columns:
-            print(1)
-            raise ValueError(f"Target column {self.problem.target} not found.")
-        
-        _target_col_type = self.get_col_type(self.problem.target)
+        logger.debug(f"Validating target column: {self.problem.target}")
 
-        if self.problem.type == getattr(ProblemType, "classification").value:    
-            print(2)
-            if not ClassificationProblem.is_allowed_dtypes(_target_col_type):
-                print(3)
-                raise ValueError(f"Dtype {_target_col_type} not allowed as classification target type.")
-        print(4)
-        if self.problem.type == getattr(ProblemType, "regression").value:
-            print(5)
-            if not RegressionProblem.is_allowed_dtypes(_target_col_type):
-                print(6)
-                raise ValueError(f"Dtype {_target_col_type} not allowed as regression target type.")
+        if self.problem.target not in self.dataframe.columns:
+            available = ", ".join(self.dataframe.columns[:5])
+            available_suffix = "..." if len(self.dataframe.columns) > 5 else ""
+            raise ValueError(
+                f"Target column '{self.problem.target}' not found. "
+                f"Available columns: {available}{available_suffix}"
+            )
+
+        target_type = self.get_col_type(self.problem.target)
+        logger.debug(f"Target column type: {target_type}")
+
+        if self.problem.type == ProblemType.classification:
+            if not ClassificationProblem.is_allowed_dtypes(target_type):
+                allowed_types = "categorical (string, char, varchar), boolean, or integer"
+                raise ValueError(
+                    f"Target column '{self.problem.target}' has type '{target_type}' which is not valid "
+                    f"for classification. Expected: {allowed_types}"
+                )
+
+            # Additional validation for classification
+            unique_count = self.dataframe.select(psf.count_distinct(self.problem.target)).first()[0]
+            logger.debug(f"Target unique values: {unique_count}")
+
+            if unique_count < 2:
+                raise ValueError(
+                    f"Classification target '{self.problem.target}' must have at least 2 distinct classes, "
+                    f"found {unique_count}"
+                )
+
+            if unique_count > max_classes:
+                raise ValueError(
+                    f"Target column '{self.problem.target}' has {unique_count} distinct classes, "
+                    f"which exceeds the maximum of {max_classes}. Consider using regression or reducing classes."
+                )
+
+        elif self.problem.type == ProblemType.regression:
+            if not RegressionProblem.is_allowed_dtypes(target_type):
+                allowed_types = "numerical (float, double, decimal, long, short, byte) but not integer"
+                raise ValueError(
+                    f"Target column '{self.problem.target}' has type '{target_type}' which is not valid "
+                    f"for regression. Expected: {allowed_types}"
+                )
             
 
     def check(self, max_classes: int = 10):
