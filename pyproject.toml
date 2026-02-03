@@ -31,4 +31,6 @@ dependencies = [
     "uvicorn[standard]>=0.40.0",
     # Session persistence
     "redis>=5.0.0",
+    # Experiment tracking
+    "mlflow>=2.12.0",
 ]

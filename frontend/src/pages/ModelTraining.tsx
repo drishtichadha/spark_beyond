@@ -64,6 +64,7 @@ export function ModelTraining() {
   const trainResult = trainMutation.data?.data?.data as {
     train_metrics: TrainingMetrics;
     test_metrics: TrainingMetrics;
+    mlflow_run_id?: string;
   } | undefined;
 
   if (!state?.has_preprocessed) {
@@ -253,6 +254,11 @@ export function ModelTraining() {
           <div className="flex items-center gap-2 text-green-600">
             <CheckCircle2 className="w-5 h-5" />
             <span className="font-medium">Model trained successfully!</span>
+            {trainResult?.mlflow_run_id && (
+              <span className="text-xs text-muted-foreground ml-2">
+                MLflow run: <code>{trainResult.mlflow_run_id.slice(0, 8)}...</code>
+              </span>
+            )}
           </div>
 
           {/* Metrics Cards */}

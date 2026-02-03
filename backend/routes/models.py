@@ -1,12 +1,18 @@
 """
 Model routes - Training and evaluation
 """
+import time
+import logging
+
 from fastapi import APIRouter, HTTPException, Request, Depends
 
 from backend.schemas.api_models import (
     TrainingRequest, AutoMLRequest, APIResponse, ModelResult, TrainingMetrics
 )
 from backend.services.spark_service import spark_service, get_spark_service, SparkService
+from backend.services.mlflow_service import get_mlflow_tracker
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -29,14 +35,37 @@ async def train_model(
 ):
     """Train XGBoost model"""
     try:
+        start_time = time.time()
         result = svc.train_model(
             train_split=request.train_split,
             max_depth=request.max_depth,
             learning_rate=request.learning_rate,
             num_rounds=request.num_rounds
         )
+        training_time = time.time() - start_time
+
         # Save state after training
         await svc.save_state()
+
+        # Log to MLflow
+        try:
+            tracker = get_mlflow_tracker(svc.session_id)
+            mlflow_run_id = tracker.log_xgboost_run(
+                params={
+                    "train_split": request.train_split,
+                    "max_depth": request.max_depth,
+                    "learning_rate": request.learning_rate,
+                    "num_rounds": request.num_rounds,
+                },
+                train_metrics=result.get("train_metrics", {}),
+                test_metrics=result.get("test_metrics", {}),
+                training_time=training_time,
+            )
+            if mlflow_run_id:
+                result["mlflow_run_id"] = mlflow_run_id
+        except Exception as e:
+            logger.debug(f"MLflow logging skipped: {e}")
+
         return APIResponse(
             success=True,
             message="Model trained successfully",
@@ -118,6 +147,18 @@ async def train_baselines(svc: SparkService = Depends(get_session_service)):
                 "training_time": lr_result.training_time
             })
 
+        # Log each baseline to MLflow
+        try:
+            tracker = get_mlflow_tracker(svc.session_id)
+            for result_dict in results:
+                tracker.log_baseline_run(
+                    model_name=result_dict["model_name"],
+                    metrics=result_dict["metrics"],
+                    training_time=result_dict["training_time"],
+                )
+        except Exception as e:
+            logger.debug(f"MLflow baseline logging skipped: {e}")
+
         return APIResponse(
             success=True,
             message=f"Trained {len(results)} baseline models",
@@ -157,17 +198,38 @@ async def run_automl(
             quick_mode=request.quick_mode
         )
 
+        response_data = {
+            "best_score": result.best_score,
+            "problem_type": result.problem_type,
+            "metric": result.metric,
+            "search_time": result.search_time,
+            "model_summary": result.model_summary,
+            "feature_importance": result.feature_importance.head(15).to_dict('records') if result.feature_importance is not None else None
+        }
+
+        # Log to MLflow
+        try:
+            tracker = get_mlflow_tracker(svc.session_id)
+            mlflow_run_id = tracker.log_automl_run(
+                config={
+                    "timeout": request.timeout,
+                    "cpu_limit": request.cpu_limit,
+                    "quick_mode": request.quick_mode,
+                },
+                best_score=result.best_score,
+                search_time=result.search_time,
+                problem_type=result.problem_type,
+                metric=result.metric,
+            )
+            if mlflow_run_id:
+                response_data["mlflow_run_id"] = mlflow_run_id
+        except Exception as e:
+            logger.debug(f"MLflow automl logging skipped: {e}")
+
         return APIResponse(
             success=True,
             message=f"AutoML completed in {result.search_time:.1f}s",
-            data={
-                "best_score": result.best_score,
-                "problem_type": result.problem_type,
-                "metric": result.metric,
-                "search_time": result.search_time,
-                "model_summary": result.model_summary,
-                "feature_importance": result.feature_importance.head(15).to_dict('records') if result.feature_importance is not None else None
-            }
+            data=response_data
         )
     except HTTPException:
         raise
@@ -185,6 +247,26 @@ async def compare_base_vs_engineered(svc: SparkService = Depends(get_session_ser
         result = svc.compare_base_vs_engineered_features()
         # Save state after comparison
         await svc.save_state()
+
+        # Log individual comparison runs to MLflow
+        try:
+            tracker = get_mlflow_tracker(svc.session_id)
+            for entry in result.get("comparison_table", []):
+                metrics = {
+                    k: v for k, v in entry.items()
+                    if k in ("accuracy", "precision", "recall", "f1", "auc_roc")
+                    and v is not None
+                }
+                tracker.log_feature_comparison_run(
+                    model_name=entry.get("model", "Unknown"),
+                    feature_set=entry.get("feature_set", "unknown"),
+                    metrics=metrics,
+                    training_time=entry.get("training_time", 0),
+                    num_features=entry.get("num_features", 0),
+                )
+        except Exception as e:
+            logger.debug(f"MLflow comparison logging skipped: {e}")
+
         return APIResponse(
             success=True,
             message="Feature comparison completed",
@@ -210,3 +292,56 @@ async def get_comparison_summary(svc: SparkService = Depends(get_session_service
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/experiments")
+async def get_experiments(svc: SparkService = Depends(get_session_service)):
+    """Get MLflow experiment info for current session"""
+    try:
+        tracker = get_mlflow_tracker(svc.session_id)
+        if not tracker.is_enabled:
+            return APIResponse(
+                success=True,
+                message="MLflow tracking not available",
+                data={"enabled": False, "experiment": None}
+            )
+        experiment_info = tracker.get_experiment_info()
+        return APIResponse(
+            success=True,
+            message="Experiment info retrieved",
+            data={"enabled": True, "experiment": experiment_info}
+        )
+    except Exception as e:
+        return APIResponse(
+            success=True,
+            message="MLflow not available",
+            data={"enabled": False, "error": str(e)}
+        )
+
+
+@router.get("/runs")
+async def get_runs(
+    max_results: int = 50,
+    svc: SparkService = Depends(get_session_service)
+):
+    """Get MLflow runs for current session's experiment"""
+    try:
+        tracker = get_mlflow_tracker(svc.session_id)
+        if not tracker.is_enabled:
+            return APIResponse(
+                success=True,
+                message="MLflow tracking not available",
+                data={"enabled": False, "runs": []}
+            )
+        runs = tracker.get_runs(max_results=max_results)
+        return APIResponse(
+            success=True,
+            message=f"Retrieved {len(runs)} runs",
+            data={"enabled": True, "runs": runs}
+        )
+    except Exception as e:
+        return APIResponse(
+            success=True,
+            message="MLflow not available",
+            data={"enabled": False, "runs": [], "error": str(e)}
+        )

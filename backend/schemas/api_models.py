@@ -161,6 +161,7 @@ class ModelResult(BaseModel):
     model_name: str
     metrics: TrainingMetrics
     training_time: float
+    mlflow_run_id: Optional[str] = None
 
 
 class FeatureImportance(BaseModel):
@@ -206,6 +207,28 @@ class SHAPResult(BaseModel):
     feature_importance: List[Dict[str, Any]]
     plot_path: Optional[str] = None
 
+
+# ============ MLflow Tracking Models ============
+
+class MLflowRunInfo(BaseModel):
+    run_id: str
+    run_name: str
+    status: str
+    start_time: str
+    end_time: Optional[str] = None
+    params: Dict[str, Any] = {}
+    metrics: Dict[str, float] = {}
+    tags: Dict[str, str] = {}
+
+
+class MLflowExperimentInfo(BaseModel):
+    experiment_id: str
+    name: str
+    artifact_location: Optional[str] = None
+    lifecycle_stage: Optional[str] = None
+
+
+# ============ Generic Response ============
 
 class APIResponse(BaseModel):
     success: bool

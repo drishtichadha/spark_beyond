@@ -6,3 +6,6 @@ __pycache__/
 
 # Session data (parquet files, models, etc.)
 backend/data/sessions/
+
+# MLflow experiment tracking data
+mlruns/

@@ -303,6 +303,37 @@ export interface FeatureComparisonResult {
   };
 }
 
+// MLflow Experiment Tracking types
+export interface MLflowRunInfo {
+  run_id: string;
+  run_name: string;
+  status: string;
+  start_time: string;
+  end_time?: string;
+  params: Record<string, string>;
+  metrics: Record<string, number>;
+  tags: Record<string, string>;
+}
+
+export interface MLflowExperimentInfo {
+  experiment_id: string;
+  name: string;
+  artifact_location?: string;
+  lifecycle_stage?: string;
+}
+
+export interface MLflowRunsResponse {
+  enabled: boolean;
+  runs: MLflowRunInfo[];
+  error?: string;
+}
+
+export interface MLflowExperimentResponse {
+  enabled: boolean;
+  experiment?: MLflowExperimentInfo;
+  error?: string;
+}
+
 // API Functions
 export const dataApi = {
   getState: () => api.get<APIResponse<PipelineState>>('/api/data/state'),
@@ -367,6 +398,14 @@ export const modelsApi = {
   compareFeatures: () => api.post<APIResponse<FeatureComparisonResult>>('/api/models/compare-features'),
 
   getComparisonSummary: () => api.get<APIResponse>('/api/models/comparison-summary'),
+
+  getExperiments: () =>
+    api.get<APIResponse<MLflowExperimentResponse>>('/api/models/experiments'),
+
+  getRuns: (maxResults?: number) =>
+    api.get<APIResponse<MLflowRunsResponse>>('/api/models/runs', {
+      params: { max_results: maxResults },
+    }),
 };
 
 export const insightsApi = {

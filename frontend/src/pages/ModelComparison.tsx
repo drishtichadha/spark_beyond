@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { dataApi, modelsApi } from '@/lib/api';
-import type { FeatureComparisonResult } from '@/lib/api';
+import type { FeatureComparisonResult, MLflowRunsResponse } from '@/lib/api';
 import {
   BarChart3,
   AlertCircle,
@@ -20,6 +20,8 @@ import {
   Layers,
   ArrowUpRight,
   ArrowDownRight,
+  FlaskConical,
+  RefreshCw,
 } from 'lucide-react';
 import {
   BarChart,
@@ -63,6 +65,7 @@ export function ModelComparison() {
     mutationFn: () => modelsApi.trainBaselines(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['baselines'] });
+      refetchRuns();
     },
   });
 
@@ -73,11 +76,27 @@ export function ModelComparison() {
         cpu_limit: 4,
         quick_mode: true,
       }),
+    onSuccess: () => {
+      refetchRuns();
+    },
   });
 
   const featureComparisonMutation = useMutation({
     mutationFn: () => modelsApi.compareFeatures(),
+    onSuccess: () => {
+      refetchRuns();
+    },
   });
+
+  const { data: runsResponse, refetch: refetchRuns } = useQuery({
+    queryKey: ['mlflowRuns'],
+    queryFn: async () => {
+      const response = await modelsApi.getRuns(50);
+      return response.data;
+    },
+  });
+
+  const mlflowData = runsResponse?.data as MLflowRunsResponse | undefined;
 
   const baselines = baselinesMutation.data?.data?.data as BaselineResult[] | undefined;
   const automlResult = automlMutation.data?.data?.data as AutoMLResult | undefined;
@@ -590,6 +609,83 @@ export function ModelComparison() {
           )}
         </CardContent>
       </Card>
+
+      {/* Experiment History (MLflow) */}
+      {mlflowData?.enabled && mlflowData.runs.length > 0 && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <FlaskConical className="w-5 h-5" />
+                  Experiment History
+                </CardTitle>
+                <CardDescription>
+                  All tracked training runs for this session (MLflow)
+                </CardDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => refetchRuns()}>
+                <RefreshCw className="w-4 h-4 mr-1" />
+                Refresh
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="text-left py-3 px-4">Run</th>
+                    <th className="text-left py-3 px-4">Type</th>
+                    <th className="text-right py-3 px-4">Accuracy</th>
+                    <th className="text-right py-3 px-4">F1</th>
+                    <th className="text-right py-3 px-4">AUC</th>
+                    <th className="text-right py-3 px-4">Time</th>
+                    <th className="text-left py-3 px-4">Run ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mlflowData.runs.map((run) => {
+                    const accuracy = run.metrics.test_accuracy ?? run.metrics.accuracy;
+                    const f1 = run.metrics.test_f1_score ?? run.metrics.f1;
+                    const auc = run.metrics.test_auc_roc ?? run.metrics.best_score;
+
+                    return (
+                      <tr key={run.run_id} className="border-b hover:bg-slate-50 dark:hover:bg-slate-900">
+                        <td className="py-3 px-4 font-medium">{run.run_name}</td>
+                        <td className="py-3 px-4">
+                          <Badge variant="outline">
+                            {run.tags.model_type || 'unknown'}
+                          </Badge>
+                        </td>
+                        <td className="text-right py-3 px-4">
+                          {accuracy != null ? `${(accuracy * 100).toFixed(1)}%` : '-'}
+                        </td>
+                        <td className="text-right py-3 px-4">
+                          {f1 != null ? `${(f1 * 100).toFixed(1)}%` : '-'}
+                        </td>
+                        <td className="text-right py-3 px-4">
+                          {auc != null ? `${(auc * 100).toFixed(1)}%` : '-'}
+                        </td>
+                        <td className="text-right py-3 px-4">
+                          {run.metrics.training_time_seconds != null
+                            ? `${run.metrics.training_time_seconds.toFixed(1)}s`
+                            : '-'}
+                        </td>
+                        <td className="py-3 px-4">
+                          <code className="text-xs text-muted-foreground">
+                            {run.run_id.slice(0, 8)}...
+                          </code>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Next Steps */}
       {(baselines || automlResult || featureComparison) && (
