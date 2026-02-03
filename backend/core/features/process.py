@@ -6,10 +6,11 @@ from pyspark.sql import DataFrame
 
 
 class PreProcessVariables:
-    def __init__(self, dataframe: DataFrame, problem: Problem, schema_checks: SchemaChecks):
+    def __init__(self, dataframe: DataFrame, problem: Problem, schema_checks: SchemaChecks, train_dataframe: DataFrame = None):
         self.dataframe = dataframe
         self.problem = problem
         self.schema_checks = schema_checks
+        self.train_dataframe = train_dataframe
 
 
     def target_processing(self):
@@ -29,10 +30,13 @@ class PreProcessVariables:
         """Index categorical variables and convert them into one hot encoded values"""
 
         categorical_columns = self.schema_checks.get_typed_col(col_type="categorical")
-        categorical_columns.remove(self.problem.target) #removing target column from the categlorical variable list
+        # categorical_columns.remove(self.problem.target) #removing target column from the categlorical variable list
+        if self.problem.target in categorical_columns:
+            categorical_columns.remove(self.problem.target)
 
         all_columns = self.dataframe.columns
-        all_columns.remove(self.problem.target)
+        if self.problem.target in all_columns:
+            all_columns.remove(self.problem.target)
 
         all_columns = [_val for _val in all_columns if _val not in categorical_columns]
 
@@ -56,7 +60,10 @@ class PreProcessVariables:
         stages, categorical_columns, feature_output_col, all_columns = self.categorical_processing_stages()
 
         pipeline = Pipeline(stages=stages)
-        preprocessing_model = pipeline.fit(self.dataframe)
+        if self.train_dataframe is not None:
+            preprocessing_model = pipeline.fit(self.train_dataframe)
+        else:
+            preprocessing_model = pipeline.fit(self.dataframe)
 
         transformed_df = preprocessing_model.transform(self.dataframe)
 
