@@ -1,5 +1,5 @@
 """
-MLflow Tracking Service - Manages experiment tracking with local file storage.
+MLflow Tracking Service - Manages experiment tracking with Databricks MLflow.
 
 All MLflow operations are wrapped in error handling so that tracking failures
 never break the core model training pipeline.
@@ -26,7 +26,7 @@ class MLflowTracker:
     """
     Session-aware MLflow experiment tracker.
 
-    Uses local file-based tracking (./mlruns/ directory).
+    Uses Databricks MLflow tracking.
     Each session gets its own MLflow experiment.
 
     All public methods catch exceptions internally so callers
@@ -40,14 +40,18 @@ class MLflowTracker:
         self._initialize()
 
     def _initialize(self) -> None:
-        """Initialize MLflow with local file tracking."""
+        """Initialize MLflow with Databricks tracking."""
         try:
             mlflow = _get_mlflow()
 
-            tracking_uri = f"file://{os.path.abspath('./mlruns')}"
-            mlflow.set_tracking_uri(tracking_uri)
+            # Use Databricks MLflow tracking server (default in Databricks)
+            # Do not set tracking_uri to a file path or workspace path in Databricks
+            # Remove the following line to use the default Databricks tracking server
+            # tracking_uri = "/Workspace/Users/yadvendra@aidetic.in/spark_tune_hdfc_demo"
+            # mlflow.set_tracking_uri(tracking_uri)
 
-            experiment_name = f"spark_tune_{self._session_id or 'default'}"
+            experiment_name = f"/Users/yadvendra@aidetic.in/spark_tune_{self._session_id or 'default'}"
+            mlflow.set_experiment(experiment_name)
             experiment = mlflow.get_experiment_by_name(experiment_name)
 
             if experiment is None:

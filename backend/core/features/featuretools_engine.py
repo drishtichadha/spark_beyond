@@ -177,7 +177,8 @@ class FeaturetoolsEngine:
         trans_primitives: Optional[List[str]] = None,
         max_features: int = 100,
         cutoff_time: Optional[pd.DataFrame] = None,
-        training_window: Optional[str] = None
+        training_window: Optional[str] = None,
+        sample = False
     ) -> FeaturetoolsResult:
         """
         Run Deep Feature Synthesis on a single table
@@ -206,7 +207,7 @@ class FeaturetoolsEngine:
             logger.info(f"Converting PySpark DataFrame to Pandas (max {self.max_rows} rows)")
 
         # Convert to Pandas
-        pdf = spark_to_pandas_safe(spark_df, max_rows=self.max_rows, sample=True)
+        pdf = spark_to_pandas_safe(spark_df, max_rows=self.max_rows, sample=sample)
 
         if self.verbose:
             logger.info(f"Converted {len(pdf)} rows to Pandas")
@@ -274,7 +275,8 @@ class FeaturetoolsEngine:
         agg_primitives: Optional[List[str]] = None,
         trans_primitives: Optional[List[str]] = None,
         max_features: int = 100,
-        cutoff_time: Optional[pd.DataFrame] = None
+        cutoff_time: Optional[pd.DataFrame] = None,
+        sample=False
     ) -> FeaturetoolsResult:
         """
         Run Deep Feature Synthesis on multiple related tables
@@ -307,7 +309,7 @@ class FeaturetoolsEngine:
             if self.verbose:
                 logger.info(f"Converting {name} to Pandas")
 
-            pdf = spark_to_pandas_safe(spark_df, max_rows=self.max_rows, sample=True)
+            pdf = spark_to_pandas_safe(spark_df, max_rows=self.max_rows, sample=sample)
             pandas_dfs[name] = pdf
 
             entity_config = entities[name]
@@ -391,7 +393,7 @@ class FeaturetoolsEngine:
 
         if original_spark_df is not None and join_column:
             # Join with original (to get back full dataset if sampled)
-            feature_cols = [c for c in spark_features.columns if c != join_column]
+            feature_cols = [c for c in spark_features.columns if (c != join_column) and (c not in original_spark_df.columns)]
             spark_features = original_spark_df.join(
                 spark_features.select([join_column] + feature_cols),
                 on=join_column,

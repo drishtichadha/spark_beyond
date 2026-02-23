@@ -136,7 +136,8 @@ class TSFreshEngine:
         spark_df: SparkDataFrame,
         id_column: str,
         time_column: str,
-        value_columns: List[str]
+        value_columns: List[str],
+        sample=False
     ) -> pd.DataFrame:
         """
         Convert PySpark DataFrame to tsfresh long format
@@ -153,7 +154,7 @@ class TSFreshEngine:
         selected_df = spark_df.select(*columns_to_select)
 
         # Convert to Pandas
-        pdf = spark_to_pandas_safe(selected_df, max_rows=self.max_rows, sample=True)
+        pdf = spark_to_pandas_safe(selected_df, max_rows=self.max_rows, sample=sample)
 
         # Ensure proper column names for tsfresh
         pdf = pdf.rename(columns={id_column: 'id', time_column: 'time'})
@@ -348,7 +349,7 @@ class TSFreshEngine:
         result_df = id_df.join(spark_features, on=id_column, how='left')
 
         # Join back all original columns except id
-        other_cols = [c for c in original_spark_df.columns if c != id_column]
+        other_cols = [c for c in original_spark_df.columns if (c != id_column) and (c not in spark_features.columns)]
         if other_cols:
             result_df = result_df.join(
                 original_spark_df.select([id_column] + other_cols),
